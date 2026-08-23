@@ -1,0 +1,85 @@
+--- server.ts
++++ server.ts
+@@ -17,6 +17,21 @@
+   }
+ });
+ 
++// Simple in-memory cache
++const cache = new Map<string, { data: any, timestamp: number }>();
++const CACHE_TTL = 1000 * 60 * 15; // 15 minutes
++
++function getCached(key: string) {
++  const item = cache.get(key);
++  if (item && Date.now() - item.timestamp < CACHE_TTL) {
++    return item.data;
++  }
++  return null;
++}
++function setCache(key: string, data: any) {
++  cache.set(key, { data, timestamp: Date.now() });
++}
++
+ // API Routes
+ app.post('/api/analyze-chart', async (req, res) => {
+   try {
+@@ -58,7 +73,12 @@
+ 
+ app.get('/api/top-movers', async (req, res) => {
+   try {
++    const cached = getCached('top-movers');
++    if (cached) return res.json(cached);
++
+     const response = await ai.models.generateContent({
+       model: 'gemini-3.5-flash',
+       contents: `Search the web for today's top market movers in the stock or crypto market, specifically looking for assets that have experienced massive price surges (e.g. 50% raise or massive gains in the last 24 hours). Provide 5 stocks/cryptos that have the absolute highest movement.
+@@ -87,7 +107,9 @@
+       },
+     });
+     
+-    res.json(JSON.parse(response.text));
++    const data = JSON.parse(response.text);
++    setCache('top-movers', data);
++    res.json(data);
+   } catch (error: any) {
+     console.error('Error fetching top movers:', error);
+@@ -102,6 +124,10 @@
+     if (!query) {
+       return res.status(400).json({ error: 'Please provide a search query (e.g. AAPL, Tesla, BTC)' });
+     }
++    const cacheKey = `analyze-stocks-${query.toLowerCase()}`;
++    const cached = getCached(cacheKey);
++    if (cached) return res.json(cached);
++
+     const response = await ai.models.generateContent({
+       model: 'gemini-3.5-flash',
+       contents: `Search the web for the stock or crypto: "${query}". Provide comprehensive details including its latest real-time price, technical chart analysis, company/asset background details, a definitive signal (BUY/SELL/HOLD), and a specific declaration on its future profitability (will it make you profitable or not based on current momentum and fundamentals).`,
+@@ -128,7 +154,9 @@
+       },
+     });
+ 
+-    res.json(JSON.parse(response.text));
++    const data = JSON.parse(response.text);
++    setCache(cacheKey, data);
++    res.json(data);
+   } catch (error: any) {
+     console.error('Error analyzing stock:', error);
+@@ -139,6 +167,9 @@
+ // Market News endpoint using Google Search Grounding
+ app.get('/api/market-news', async (req, res) => {
+   try {
++    const cached = getCached('market-news');
++    if (cached) return res.json(cached);
++
+     const response = await ai.models.generateContent({
+       model: 'gemini-3.5-flash',
+       contents: 'Search the web for the latest major breaking news in the stock market and crypto market today. Return 6 top news stories.',
+@@ -160,7 +191,9 @@
+         }
+       }
+     });
+-    res.json(JSON.parse(response.text));
++    const data = JSON.parse(response.text);
++    setCache('market-news', data);
++    res.json(data);
+   } catch (error: any) {
+     console.error('Market news error:', error);

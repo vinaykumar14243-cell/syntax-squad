@@ -1,0 +1,23 @@
+{
+  "entities": {
+    "SearchQuery": {
+      "title": "Search Query",
+      "description": "A stock or crypto search query made by the user",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "query": { "type": "string" },
+        "symbol": { "type": "string" },
+        "result": { "type": "string" },
+        "createdAt": { "type": "number", "description": "Timestamp of the search" }
+      },
+      "required": ["userId", "query", "symbol", "result", "createdAt"]
+    }
+  },
+  "firestore": {
+    "users/{userId}/searches": {
+      "schema": { "$ref": "#/entities/SearchQuery" },
+      "description": "Stores user search history"
+    }
+  }
+}
