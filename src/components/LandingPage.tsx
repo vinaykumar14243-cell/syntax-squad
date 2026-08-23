@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, useScroll, useTransform } from 'motion/react';
 import { TrendingUp, ArrowRight, Sparkles, Zap, ShieldCheck, BarChart2 } from 'lucide-react';
 import ChartGraphic from './ChartGraphic';
+import { fetchTickersApi } from '../lib/apiClient';
 
 export default function LandingPage({ onEnter }: { onEnter: () => void }) {
   const marketSectionRef = useRef<HTMLElement>(null);
@@ -29,28 +30,26 @@ export default function LandingPage({ onEnter }: { onEnter: () => void }) {
   }, [onEnter]);
 
   useEffect(() => {
-    // Fetch live tickers via secure proxy
-    const fetchLive = () => {
-      fetch('/api/tickers')
-        .then(res => res.json())
-        .then(data => {
-          if (Array.isArray(data) && data.length > 0) {
-            const nifty = data.find((d: any) => d.symbol.includes('NIFTY') || d.symbol.includes('USD/INR'));
-            if (nifty) {
-              setHeroIndex({
-                symbol: nifty.symbol,
-                price: nifty.price.replace('₹', ''),
-                change: nifty.change,
-                isUp: nifty.isUp,
-                name: nifty.name || "Live Index"
-              });
-            }
-            setTickers(data);
+    // Fetch live tickers via secure proxy / client fallback
+    const fetchLive = async () => {
+      try {
+        const data = await fetchTickersApi();
+        if (Array.isArray(data) && data.length > 0) {
+          const nifty = data.find((d: any) => d.symbol.includes('NIFTY') || d.symbol.includes('USD/INR'));
+          if (nifty) {
+            setHeroIndex({
+              symbol: nifty.symbol,
+              price: nifty.price.replace('₹', ''),
+              change: nifty.change,
+              isUp: nifty.isUp,
+              name: nifty.name || "Live Index"
+            });
           }
-        })
-        .catch(err => {
-          console.warn('Ticker proxy loading issue, using fallback live data:', err);
-        });
+          setTickers(data);
+        }
+      } catch (err) {
+        console.warn('Ticker update handled safely:', err);
+      }
     };
 
     fetchLive();

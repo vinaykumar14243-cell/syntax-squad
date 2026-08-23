@@ -22,7 +22,16 @@ import {
   Zap,
   Clock,
   Filter,
-  DollarSign
+  DollarSign,
+  ShieldAlert,
+  HelpCircle,
+  Info,
+  FileWarning,
+  CheckCircle2,
+  XCircle,
+  Eye,
+  Target,
+  Shield
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -33,11 +42,34 @@ import {
   MarketNewsItem, 
   MarketNewsResponse,
   ChartAnalysisResponse,
-  LiveQuote
+  LiveQuote,
+  ChartSignalStatus,
+  NewsArticle
 } from '../types';
+import {
+  fetchTickersApi,
+  fetchLiveQuotesApi,
+  fetchTopMoversApi,
+  analyzeStocksApi,
+  analyzeChartApi,
+  fetchMarketNewsApi,
+  fetchStockNewsApi
+} from '../lib/apiClient';
+import {
+  analyzeImagePixelsOnClient,
+  generateValidationDiagnosticReport,
+  ClientImageValidationResult
+} from '../lib/imageValidator';
+import { NewsIntelligenceView } from './NewsIntelligenceView';
 
 export default function Dashboard({ onExit }: { onExit: () => void }) {
   const [activeTab, setActiveTab] = useState<'upload' | 'movers' | 'custom' | 'news'>('upload');
+  const [selectedStockQuery, setSelectedStockQuery] = useState<string>('');
+
+  const handleSelectStock = (symbol: string) => {
+    setSelectedStockQuery(symbol);
+    setActiveTab('custom');
+  };
 
   return (
     <div className="min-h-screen bg-[#050811] text-[#f3f7ff] flex flex-col">
@@ -65,7 +97,7 @@ export default function Dashboard({ onExit }: { onExit: () => void }) {
           <TabButton active={activeTab === 'upload'} onClick={() => setActiveTab('upload')} icon={<Upload size={16} />} label="ANALYZE CHART" />
           <TabButton active={activeTab === 'movers'} onClick={() => setActiveTab('movers')} icon={<TrendingUp size={16} />} label="TOP MOVERS" />
           <TabButton active={activeTab === 'custom'} onClick={() => setActiveTab('custom')} icon={<Search size={16} />} label="INDIAN & FOREX SEARCH" />
-          <TabButton active={activeTab === 'news'} onClick={() => setActiveTab('news')} icon={<Newspaper size={16} />} label="MARKET NEWS" />
+          <TabButton active={activeTab === 'news'} onClick={() => setActiveTab('news')} icon={<Newspaper size={16} />} label="GLOBAL NEWS INTELLIGENCE" />
         </nav>
 
         <div className="flex items-center gap-3">
@@ -93,14 +125,14 @@ export default function Dashboard({ onExit }: { onExit: () => void }) {
         <TabButton active={activeTab === 'upload'} onClick={() => setActiveTab('upload')} icon={<Upload size={16} />} label="Analyze Chart" />
         <TabButton active={activeTab === 'movers'} onClick={() => setActiveTab('movers')} icon={<TrendingUp size={16} />} label="Top Movers" />
         <TabButton active={activeTab === 'custom'} onClick={() => setActiveTab('custom')} icon={<Search size={16} />} label="Indian & Forex" />
-        <TabButton active={activeTab === 'news'} onClick={() => setActiveTab('news')} icon={<Newspaper size={16} />} label="News" />
+        <TabButton active={activeTab === 'news'} onClick={() => setActiveTab('news')} icon={<Newspaper size={16} />} label="News Intel" />
       </div>
 
       <main className="flex-1 w-full max-w-[1440px] mx-auto p-4 sm:p-6 lg:p-8 relative z-10">
         {activeTab === 'upload' && <UploadChartTab />}
-        {activeTab === 'movers' && <TopMoversTab />}
-        {activeTab === 'custom' && <CustomStocksTab />}
-        {activeTab === 'news' && <NewsTab />}
+        {activeTab === 'movers' && <TopMoversTab onSelectStock={handleSelectStock} />}
+        {activeTab === 'custom' && <CustomStocksTab initialQuery={selectedStockQuery} />}
+        {activeTab === 'news' && <NewsTab onSelectStock={handleSelectStock} />}
       </main>
     </div>
   );
@@ -140,8 +172,7 @@ function LiveMarketTickerBar() {
 
   const fetchLiveTickers = async () => {
     try {
-      const res = await fetch('/api/tickers');
-      const data = await res.json();
+      const data = await fetchTickersApi();
       if (Array.isArray(data) && data.length > 0) {
         setTickers(data);
         const randomSym = data[Math.floor(Math.random() * data.length)]?.symbol;
@@ -285,16 +316,145 @@ function UploadChartTab() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<ChartAnalysisResponse | null>(null);
+  const [clientValidation, setClientValidation] = useState<ClientImageValidationResult | null>(null);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
+  const [isValidatingLocally, setIsValidatingLocally] = useState(false);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Helper to create test canvas image files for testing validation rules
+  const handleLoadTestImage = async (type: 'blank_white' | 'blank_black' | 'solid_color' | 'valid_candlestick' | 'ui_only') => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 640;
+    canvas.height = 400;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    if (type === 'blank_white') {
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    } else if (type === 'blank_black') {
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    } else if (type === 'solid_color') {
+      ctx.fillStyle = '#1e293b';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    } else if (type === 'ui_only') {
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#334155';
+      ctx.fillRect(20, 20, 100, 30);
+      ctx.fillRect(140, 20, 100, 30);
+      ctx.fillRect(20, 350, 600, 40);
+      ctx.fillStyle = '#64748b';
+      ctx.font = '14px sans-serif';
+      ctx.fillText('Navigation Dashboard Only — No Price Candles', 150, 200);
+    } else if (type === 'valid_candlestick') {
+      // Draw realistic candlestick trading chart
+      ctx.fillStyle = '#080c14';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      
+      // Grid lines
+      ctx.strokeStyle = '#1e293b';
+      ctx.lineWidth = 1;
+      for (let y = 50; y < canvas.height; y += 50) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(canvas.width, y);
+        ctx.stroke();
+      }
+      for (let x = 60; x < canvas.width; x += 60) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, canvas.height);
+        ctx.stroke();
+      }
+
+      // Title & Price scale
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = 'bold 13px monospace';
+      ctx.fillText('NSE: RELIANCE • 15m • ₹2,985.40', 20, 30);
+      ctx.fillText('₹3,040', 580, 70);
+      ctx.fillText('₹3,000', 580, 150);
+      ctx.fillText('₹2,960', 580, 230);
+      ctx.fillText('₹2,920', 580, 310);
+
+      // Candles
+      const candleData = [
+        { open: 2930, close: 2950, high: 2960, low: 2920 },
+        { open: 2950, close: 2940, high: 2955, low: 2935 },
+        { open: 2940, close: 2965, high: 2970, low: 2938 },
+        { open: 2965, close: 2980, high: 2990, low: 2955 },
+        { open: 2980, close: 2975, high: 2988, low: 2970 },
+        { open: 2975, close: 2995, high: 3005, low: 2970 },
+        { open: 2995, close: 3015, high: 3025, low: 2990 },
+        { open: 3015, close: 3010, high: 3020, low: 3000 },
+        { open: 3010, close: 3030, high: 3038, low: 3005 },
+        { open: 3030, close: 3025, high: 3035, low: 3015 },
+        { open: 3025, close: 3045, high: 3050, low: 3020 },
+      ];
+
+      const candleW = 24;
+      const startX = 50;
+      const gap = 46;
+
+      candleData.forEach((c, idx) => {
+        const x = startX + idx * gap;
+        const isBullish = c.close >= c.open;
+        const color = isBullish ? '#10b981' : '#ef4444';
+        
+        // Map price 2900 - 3060 to Y 330 - 60
+        const scaleY = (p: number) => 330 - ((p - 2900) / 160) * 270;
+        
+        const openY = scaleY(c.open);
+        const closeY = scaleY(c.close);
+        const highY = scaleY(c.high);
+        const lowY = scaleY(c.low);
+
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x + candleW / 2, highY);
+        ctx.lineTo(x + candleW / 2, lowY);
+        ctx.stroke();
+
+        ctx.fillStyle = color;
+        const topY = Math.min(openY, closeY);
+        const bodyH = Math.max(Math.abs(closeY - openY), 4);
+        ctx.fillRect(x, topY, candleW, bodyH);
+      });
+    }
+
+    canvas.toBlob((blob) => {
+      if (blob) {
+        const testFile = new File([blob], `test_${type}.png`, { type: 'image/png' });
+        setFile(testFile);
+        setPreviewUrl(URL.createObjectURL(testFile));
+        setResult(null);
+        setError('');
+        setClientValidation(null);
+      }
+    }, 'image/png');
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const selected = e.target.files[0];
       setFile(selected);
       setPreviewUrl(URL.createObjectURL(selected));
       setResult(null);
       setError('');
+      setClientValidation(null);
+
+      // Instant client-side preliminary scan
+      try {
+        setIsValidatingLocally(true);
+        const diag = await analyzeImagePixelsOnClient(selected);
+        setClientValidation(diag);
+      } catch {
+        // fallback
+      } finally {
+        setIsValidatingLocally(false);
+      }
     }
   };
 
@@ -305,28 +465,71 @@ function UploadChartTab() {
     setCopied(false);
     
     try {
+      // 1. Mandatory Client Validation Check
+      const clientMetrics = clientValidation || await analyzeImagePixelsOnClient(file);
+      setClientValidation(clientMetrics);
+
+      if (!clientMetrics.isValid || clientMetrics.isUniformOrBlank) {
+        // Block immediately with strict validation response — no fake signals
+        setResult({
+          imageValidation: {
+            isValid: false,
+            isTradingChart: false,
+            chartValidityScore: 0,
+            reason: clientMetrics.rejectionReason || 'Unable to analyze this image. Please upload a clear screenshot containing the complete trading chart.',
+            rejectionCategory: clientMetrics.isUniformOrBlank ? 'BLANK_IMAGE' : 'NOT_A_CHART'
+          },
+          signal: {
+            status: 'INVALID_CHART',
+            direction: null,
+            analysisConfidence: 0,
+            confidenceExplanation: 'Image rejected by validation filter. Zero chart patterns detected.',
+            actionRecommendation: 'INVALID_IMAGE'
+          },
+          tradePlan: {
+            entry: null,
+            stopLoss: null,
+            target: null,
+            riskReward: null,
+            levelNotice: 'Cannot reliably determine'
+          },
+          riskManagement: {
+            riskLevel: 'N/A',
+            invalidationTriggers: ['Blank or solid color image detected — no trade can be generated.'],
+            keyWarning: 'Risk rule: Never execute trades without observable technical structure.'
+          },
+          warnings: [
+            'Unable to analyze this image. Please upload a clear screenshot containing the complete trading chart.'
+          ],
+          action: 'INVALID',
+          entryPrice: 'Cannot reliably determine',
+          stopLoss: 'Cannot reliably determine',
+          takeProfit: 'Cannot reliably determine',
+          confidence: 0,
+          error: 'Unable to analyze this image. Please upload a clear screenshot containing the complete trading chart.'
+        });
+        setLoading(false);
+        return;
+      }
+
+      // 2. Read Base64 and call server validation pipeline
       const reader = new FileReader();
       reader.readAsDataURL(file);
       reader.onload = async () => {
-        const base64Data = reader.result as string;
-        const base64Image = base64Data.split(',')[1];
-        
-        const response = await fetch('/api/analyze-chart', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            imageBase64: base64Image,
-            mimeType: file.type,
-          }),
-        });
-
-        const data: ChartAnalysisResponse = await response.json();
-        if (data && !('error' in data)) {
+        try {
+          const base64Data = reader.result as string;
+          const base64Image = base64Data.split(',')[1];
+          
+          const data = await analyzeChartApi(base64Image, file.type, clientMetrics);
           setResult(data);
-        } else {
-          setError((data as any)?.error || 'Analysis failed. Please try another chart image.');
+          if (data.imageValidation && !data.imageValidation.isValid) {
+            setError(data.imageValidation.reason || 'Unable to analyze this image. Please upload a clear screenshot containing the complete trading chart.');
+          }
+        } catch (err: any) {
+          setError(err.message || 'An error occurred during analysis');
+        } finally {
+          setLoading(false);
         }
-        setLoading(false);
       };
     } catch (err: any) {
       setError(err.message || 'An error occurred during analysis');
@@ -336,17 +539,28 @@ function UploadChartTab() {
 
   const handleCopyReport = () => {
     if (!result) return;
-    const text = `VANTA TRADE AI SIGNAL (INR ₹):
-Action: ${result.action}
-Confidence: ${result.confidence}%
-Entry: ${result.entryPrice}
-Stop Loss: ${result.stopLoss}
-Take Profit: ${result.takeProfit}
-Reasoning: ${result.analysis}`;
+    const text = `VANTA TRADE AI TECHNICAL VERIFICATION REPORT:
+Status: ${result.signal?.status || result.action}
+Symbol: ${result.chart?.symbol || 'Unknown'} | Timeframe: ${result.chart?.timeframe || 'Unknown'}
+Evidence Confidence: ${result.signal?.analysisConfidence || result.confidence}%
+Action Recommendation: ${result.signal?.actionRecommendation || result.action}
+Entry Level: ${result.tradePlan?.entry || result.entryPrice || 'N/A'}
+Stop Loss: ${result.tradePlan?.stopLoss || result.stopLoss || 'N/A'}
+Take Profit: ${result.tradePlan?.target || result.takeProfit || 'N/A'}
+Market Structure: ${result.analysis?.marketStructure || result.analysis || 'Evaluated'}
+Risk Warning: ${result.riskManagement?.keyWarning || 'Trade at your own risk'}`;
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
+
+  const isInvalidChart = Boolean(
+    result && (
+      !result.imageValidation?.isValid || 
+      result.signal?.status === 'INVALID_CHART' || 
+      result.action === 'INVALID'
+    )
+  );
 
   return (
     <motion.div 
@@ -357,15 +571,55 @@ Reasoning: ${result.analysis}`;
       <div className="lg:col-span-7 space-y-6">
         <div>
           <div className="flex items-center gap-2 mb-1">
-            <h2 className="text-2xl font-bold">Indian Stock & Forex Chart Scanner</h2>
+            <h2 className="text-2xl font-bold">Trading Chart Verification & Scanner</h2>
             <span className="px-2 py-0.5 text-[10px] font-bold bg-[#19d58b]/15 text-[#19d58b] border border-[#19d58b]/30 rounded-full">
-              ₹ INR Price Action
+              Anti-Hallucination Active
             </span>
           </div>
-          <p className="text-[#8390a6] text-sm">Upload any Indian stock (NSE/BSE), Forex currency pair (USD/INR, EUR/INR), or crypto chart for instant AI pattern recognition and entry/exit targets.</p>
+          <p className="text-[#8390a6] text-sm">
+            Upload any Indian stock (NSE/BSE) or Forex chart. The system rigorously validates the screenshot first and will reject blank, corrupted, or non-trading images without forced signals.
+          </p>
         </div>
 
-        <div className="border-2 border-dashed border-white/10 hover:border-[#19d58b]/50 rounded-3xl p-8 text-center transition-all bg-[#0b1220]/50 relative group flex flex-col items-center justify-center min-h-[300px]">
+        {/* Quick Test Presets Bar */}
+        <div className="p-3 bg-white/5 rounded-2xl border border-white/10 flex flex-wrap items-center gap-2">
+          <span className="text-xs text-[#8390a6] font-semibold flex items-center gap-1 mr-1">
+            <Eye size={14} className="text-[#53dcff]" /> Quick Validation Tests:
+          </span>
+          <button
+            onClick={() => handleLoadTestImage('valid_candlestick')}
+            className="px-2.5 py-1 text-xs rounded-lg bg-[#19d58b]/15 text-[#19d58b] border border-[#19d58b]/30 hover:bg-[#19d58b]/25 transition cursor-pointer font-medium"
+          >
+            ✓ Valid NSE Chart
+          </button>
+          <button
+            onClick={() => handleLoadTestImage('blank_white')}
+            className="px-2.5 py-1 text-xs rounded-lg bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition cursor-pointer font-medium"
+          >
+            ✗ Blank White
+          </button>
+          <button
+            onClick={() => handleLoadTestImage('blank_black')}
+            className="px-2.5 py-1 text-xs rounded-lg bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition cursor-pointer font-medium"
+          >
+            ✗ Blank Black
+          </button>
+          <button
+            onClick={() => handleLoadTestImage('solid_color')}
+            className="px-2.5 py-1 text-xs rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20 hover:bg-amber-500/20 transition cursor-pointer font-medium"
+          >
+            ✗ Solid Color
+          </button>
+          <button
+            onClick={() => handleLoadTestImage('ui_only')}
+            className="px-2.5 py-1 text-xs rounded-lg bg-purple-500/10 text-purple-400 border border-purple-500/20 hover:bg-purple-500/20 transition cursor-pointer font-medium"
+          >
+            ✗ UI Without Candles
+          </button>
+        </div>
+
+        {/* Dropzone Container */}
+        <div className="border-2 border-dashed border-white/10 hover:border-[#19d58b]/50 rounded-3xl p-6 text-center transition-all bg-[#0b1220]/50 relative group flex flex-col items-center justify-center min-h-[280px]">
           <input 
             type="file" 
             accept="image/*" 
@@ -374,32 +628,52 @@ Reasoning: ${result.analysis}`;
           />
           
           {previewUrl ? (
-            <div className="relative w-full h-full max-h-[360px] flex items-center justify-center">
-              <img src={previewUrl} alt="Chart preview" className="max-h-[340px] rounded-xl object-contain shadow-2xl border border-white/10" />
-              <div className="absolute bottom-2 right-2 bg-black/70 px-3 py-1 rounded-lg text-xs backdrop-blur-md border border-white/10">
+            <div className="relative w-full h-full max-h-[340px] flex items-center justify-center">
+              <img src={previewUrl} alt="Chart preview" className="max-h-[320px] rounded-xl object-contain shadow-2xl border border-white/10" />
+              <div className="absolute bottom-2 right-2 bg-black/80 px-3 py-1 rounded-lg text-xs backdrop-blur-md border border-white/10 text-[#8390a6]">
                 Click or Drop new image to change
               </div>
             </div>
           ) : (
-            <div className="space-y-4">
-              <div className="w-16 h-16 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center mx-auto text-[#19d58b] group-hover:scale-110 transition-transform">
-                <Upload size={28} />
+            <div className="space-y-3">
+              <div className="w-14 h-14 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center mx-auto text-[#19d58b] group-hover:scale-110 transition-transform">
+                <Upload size={26} />
               </div>
               <div>
                 <h4 className="text-base font-semibold text-white">Drag & drop Indian Stock / Forex chart</h4>
-                <p className="text-xs text-[#8390a6] mt-1">Supports PNG, JPG, WEBP screenshots from TradingView, Zerodha Kite, Groww, AngelOne, or MT4/MT5</p>
+                <p className="text-xs text-[#8390a6] mt-1 max-w-md mx-auto">
+                  Upload screenshot from TradingView, Zerodha Kite, Groww, AngelOne, or MT4/MT5 with visible candlesticks and price scale.
+                </p>
               </div>
-              <span className="inline-block px-4 py-2 rounded-xl text-xs font-semibold bg-white/5 border border-white/10 text-white">
+              <span className="inline-block px-4 py-1.5 rounded-xl text-xs font-semibold bg-white/5 border border-white/10 text-white">
                 Browse Files
               </span>
             </div>
           )}
         </div>
 
-        {error && (
-          <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-sm flex items-center gap-2">
-            <AlertTriangle size={18} />
-            {error}
+        {/* Validation Diagnostic Tag */}
+        {clientValidation && (
+          <div className={`p-3 rounded-xl border text-xs flex items-center justify-between ${
+            clientValidation.isValid && !clientValidation.isUniformOrBlank 
+              ? 'bg-[#19d58b]/10 border-[#19d58b]/30 text-[#19d58b]' 
+              : 'bg-red-500/10 border-red-500/30 text-red-400'
+          }`}>
+            <div className="flex items-center gap-2">
+              {clientValidation.isValid && !clientValidation.isUniformOrBlank ? (
+                <CheckCircle2 size={16} />
+              ) : (
+                <XCircle size={16} />
+              )}
+              <span>
+                {clientValidation.isValid && !clientValidation.isUniformOrBlank
+                  ? 'Visual contrast & pixel structure verified (Trading chart candidate)'
+                  : clientValidation.rejectionReason}
+              </span>
+            </div>
+            <span className="font-mono text-[11px] opacity-80">
+              Entropy: {clientValidation.variance.toFixed(0)} | Edge: {(clientValidation.edgeDensity * 100).toFixed(1)}%
+            </span>
           </div>
         )}
 
@@ -410,77 +684,284 @@ Reasoning: ${result.analysis}`;
           className="w-full py-4 bg-gradient-to-r from-[#19d58b] to-[#15b877] text-[#04100d] font-bold rounded-2xl hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-all text-base tracking-wide flex items-center justify-center gap-2 shadow-[0_0_25px_rgba(25,213,139,0.2)] cursor-pointer"
         >
           {loading ? (
-            <><RefreshCw className="animate-spin" size={20} /> Analyzing Price Action in ₹...</>
+            <><RefreshCw className="animate-spin" size={20} /> Validating & Scanning Chart Structure...</>
           ) : (
-            <><Sparkles size={20} /> Generate AI Signal in ₹ (INR)</>
+            <><Sparkles size={20} /> Verify & Analyze Chart</>
           )}
         </button>
       </div>
 
+      {/* Right Column: Dynamic Analysis Output or Rejection Warning Card */}
       <div className="lg:col-span-5">
         {!result && !loading && (
-          <div className="h-full min-h-[300px] border border-white/5 rounded-3xl p-8 flex flex-col items-center justify-center text-center text-[#8390a6] bg-[#0b1220]/40">
-            <BarChart2 size={48} className="mb-4 text-white/20" />
-            <h3 className="text-lg font-medium text-white mb-2">NSE / BSE & Forex Terminal Ready</h3>
-            <p className="text-sm">Upload a chart image to view AI confidence rating, entry levels in ₹ INR, stop loss, and target profit objectives.</p>
+          <div className="h-full min-h-[320px] border border-white/5 rounded-3xl p-8 flex flex-col items-center justify-center text-center text-[#8390a6] bg-[#0b1220]/40">
+            <BarChart2 size={44} className="mb-3 text-white/20" />
+            <h3 className="text-lg font-medium text-white mb-2">Technical Terminal Ready</h3>
+            <p className="text-sm max-w-sm">
+              Upload any chart to trigger the 4-stage validation pipeline: pixel entropy check, chart feature verification, multi-factor technical analysis, and risk invalidation plan.
+            </p>
           </div>
         )}
 
         {loading && (
-          <div className="h-full min-h-[300px] border border-white/5 rounded-3xl p-8 flex flex-col items-center justify-center text-center bg-[#0b1220]/40 animate-pulse">
+          <div className="h-full min-h-[320px] border border-white/5 rounded-3xl p-8 flex flex-col items-center justify-center text-center bg-[#0b1220]/40 animate-pulse">
             <div className="w-12 h-12 rounded-full border-2 border-[#19d58b] border-t-transparent animate-spin mb-4"></div>
-            <h3 className="text-lg font-medium text-white mb-2">Scanning Chart Geometry</h3>
-            <p className="text-sm text-[#8390a6]">Detecting candle structures, support zones in ₹ INR, and momentum divergences...</p>
+            <h3 className="text-lg font-medium text-white mb-2">Stage 1-4 Verification Pipeline</h3>
+            <p className="text-xs text-[#8390a6] max-w-xs">
+              Filtering out blank/solid images • Verifying candle edges & price scale • Evaluating market structure • Calculating risk levels...
+            </p>
           </div>
         )}
 
-        {result && (
-          <div className="bg-[#0b1220]/80 border border-white/10 rounded-3xl p-6 lg:p-8 space-y-6 relative overflow-hidden shadow-2xl">
-            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-[#19d58b] to-transparent"></div>
-            
-            <div className="flex justify-between items-start pb-4 border-b border-white/5">
+        {/* CASE A: INVALID / BLANK / NON-CHART IMAGE REJECTION WARNING CARD */}
+        {isInvalidChart && result && (
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.96 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-[#180b0f] border border-red-500/40 rounded-3xl p-6 lg:p-7 space-y-5 shadow-2xl relative overflow-hidden"
+          >
+            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-red-600 via-amber-500 to-red-600"></div>
+
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-red-500/20 border border-red-500/30 flex items-center justify-center text-red-400 shrink-0 mt-0.5">
+                <ShieldAlert size={22} />
+              </div>
               <div>
-                <span className="text-xs text-[#8390a6] uppercase tracking-wider font-semibold">AI Recommendation</span>
-                <div className="text-3xl font-black mt-1 flex items-center gap-3">
-                  <span className={result.action === 'BUY' ? 'text-[#19d58b]' : result.action === 'SELL' ? 'text-[#ff4e72]' : 'text-[#53dcff]'}>
-                    {result.action}
+                <div className="flex items-center gap-2">
+                  <h3 className="text-lg font-bold text-white">Chart Could Not Be Analyzed</h3>
+                  <span className="px-2 py-0.5 text-[10px] font-bold bg-red-500/20 text-red-300 border border-red-500/40 rounded-full">
+                    {result.imageValidation?.rejectionCategory || 'REJECTED'}
                   </span>
                 </div>
-              </div>
-              <div className="text-right">
-                <span className="text-xs text-[#8390a6] uppercase tracking-wider font-semibold">Confidence</span>
-                <div className="text-2xl font-bold font-mono text-white mt-1">{result.confidence}%</div>
+                <p className="text-red-300/90 text-sm font-medium mt-1">
+                  {result.imageValidation?.reason || 'Unable to analyze this image. Please upload a clear screenshot containing the complete trading chart.'}
+                </p>
               </div>
             </div>
 
-            <div className="space-y-3">
-              <SignalRow label="Suggested Entry (₹ INR)" value={result.entryPrice} type="neutral" />
-              <SignalRow label="Stop Loss Target (₹)" value={result.stopLoss} type="danger" />
-              <SignalRow label="Take Profit Target (₹)" value={result.takeProfit} type="success" />
+            {/* Strict Anti-Hallucination Guarantees */}
+            <div className="p-3.5 bg-black/40 rounded-2xl border border-red-500/20 space-y-2">
+              <div className="flex items-center gap-2 text-xs font-semibold text-red-200">
+                <FileWarning size={15} className="text-red-400" />
+                <span>Zero Signal Guarantee</span>
+              </div>
+              <p className="text-xs text-[#b8a2a8] leading-relaxed">
+                The anti-hallucination engine strictly blocks trade signals (BUY/SELL) whenever an image is blank, solid color, corrupted, or lacking observable price action.
+              </p>
             </div>
-            
-            <div className="pt-4 border-t border-white/5">
-              <p className="text-xs text-[#8390a6] uppercase tracking-wider mb-2">Technical Analysis Reasoning</p>
-              <p className="text-[#c9d2e2] text-sm leading-relaxed">{result.analysis}</p>
+
+            {/* Checklist of what is required */}
+            <div className="space-y-2 pt-1">
+              <h4 className="text-xs font-semibold text-white uppercase tracking-wider">Screenshot Requirements:</h4>
+              <div className="space-y-1.5 text-xs text-[#b8a2a8]">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 size={13} className="text-[#19d58b] shrink-0" />
+                  <span>Visible candlestick, bar, or line chart geometry</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 size={13} className="text-[#19d58b] shrink-0" />
+                  <span>Clear price scale (Y-axis) and timeframe markers</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 size={13} className="text-[#19d58b] shrink-0" />
+                  <span>Sufficient contrast against the chart background</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <XCircle size={13} className="text-red-400 shrink-0" />
+                  <span>No blank white/black screens or UI-only dashboards</span>
+                </div>
+              </div>
             </div>
+
+            <button
+              onClick={() => {
+                setFile(null);
+                setPreviewUrl(null);
+                setResult(null);
+                setClientValidation(null);
+              }}
+              className="w-full py-2.5 rounded-xl text-xs font-semibold bg-white/10 text-white hover:bg-white/15 border border-white/10 transition cursor-pointer"
+            >
+              Upload Another Screenshot
+            </button>
+          </motion.div>
+        )}
+
+        {/* CASE B: VALID TRADING CHART ANALYSIS RESULT CARD */}
+        {!isInvalidChart && result && (
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-[#0b1220]/90 border border-white/10 rounded-3xl p-6 lg:p-7 space-y-5 relative overflow-hidden shadow-2xl"
+          >
+            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-[#19d58b] to-transparent"></div>
             
-            <div className="pt-4 border-t border-white/5">
+            {/* Header: Verified Info & Identified Metadata */}
+            <div className="flex justify-between items-start pb-3 border-b border-white/10">
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="px-2 py-0.5 text-[10px] font-bold bg-[#19d58b]/20 text-[#19d58b] border border-[#19d58b]/40 rounded-md">
+                    ✓ VERIFIED TRADING CHART
+                  </span>
+                  {result.chart?.exchangeOrPlatform && result.chart.exchangeOrPlatform !== 'Unknown' && (
+                    <span className="text-[10px] text-[#8390a6] font-mono">
+                      {result.chart.exchangeOrPlatform}
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-baseline gap-2">
+                  <h3 className="text-xl font-black text-white">
+                    {result.chart?.symbol || 'NSE / FOREX'}
+                  </h3>
+                  <span className="text-xs text-[#8390a6] font-mono">
+                    Timeframe: {result.chart?.timeframe || 'Observed'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="text-right">
+                <span className="text-[10px] text-[#8390a6] uppercase tracking-wider font-semibold">Evidence Confidence</span>
+                <div className="text-2xl font-black font-mono text-white">
+                  {result.signal?.analysisConfidence ?? result.confidence}%
+                </div>
+                <span className="text-[9px] text-[#8390a6] block">Factor consistency</span>
+              </div>
+            </div>
+
+            {/* Signal Recommendation Status Pill */}
+            <div className="p-3 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between">
+              <div>
+                <span className="text-[10px] text-[#8390a6] uppercase font-semibold">Signal Setup Status</span>
+                <div className="text-sm font-extrabold mt-0.5">
+                  <SignalStatusBadge status={result.signal?.status || 'NO_SIGNAL'} />
+                </div>
+              </div>
+              <div className="text-right">
+                <span className="text-[10px] text-[#8390a6] uppercase font-semibold">Action Target</span>
+                <div className="text-sm font-bold font-mono text-[#53dcff]">
+                  {result.signal?.actionRecommendation || result.action || 'WAIT_NO_TRADE'}
+                </div>
+              </div>
+            </div>
+
+            {/* Trade Plan Setup Numbers */}
+            <div className="space-y-2">
+              <SignalRow 
+                label="Suggested Entry Zone" 
+                value={result.tradePlan?.entry || result.entryPrice || 'Cannot reliably determine'} 
+                type="neutral" 
+              />
+              <SignalRow 
+                label="Stop Loss Level" 
+                value={result.tradePlan?.stopLoss || result.stopLoss || 'Cannot reliably determine'} 
+                type="danger" 
+              />
+              <SignalRow 
+                label="Take Profit Target" 
+                value={result.tradePlan?.target || result.takeProfit || 'Cannot reliably determine'} 
+                type="success" 
+              />
+              {result.tradePlan?.riskReward && (
+                <div className="flex justify-between items-center px-4 py-2 bg-white/5 rounded-xl text-xs text-[#8390a6]">
+                  <span>Risk / Reward Ratio</span>
+                  <span className="font-mono font-bold text-white">{result.tradePlan.riskReward}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Multi-Factor Technical Breakdown */}
+            {result.analysis && typeof result.analysis === 'object' && (
+              <div className="p-3.5 bg-black/40 rounded-2xl border border-white/5 space-y-2 text-xs">
+                <div className="flex justify-between items-center text-[#8390a6]">
+                  <span className="font-semibold text-white">Trend:</span>
+                  <span className="font-mono text-[#19d58b]">{result.analysis.trend}</span>
+                </div>
+                <div className="flex justify-between items-center text-[#8390a6]">
+                  <span className="font-semibold text-white">Market Structure:</span>
+                  <span className="text-right text-[#c9d2e2] max-w-[240px] truncate">{result.analysis.marketStructure}</span>
+                </div>
+                {result.analysis.supportLevels && result.analysis.supportLevels.length > 0 && (
+                  <div className="flex justify-between items-center text-[#8390a6]">
+                    <span className="font-semibold text-white">Key Support:</span>
+                    <span className="font-mono text-[#53dcff]">{result.analysis.supportLevels.join(', ')}</span>
+                  </div>
+                )}
+                {result.analysis.resistanceLevels && result.analysis.resistanceLevels.length > 0 && (
+                  <div className="flex justify-between items-center text-[#8390a6]">
+                    <span className="font-semibold text-white">Key Resistance:</span>
+                    <span className="font-mono text-amber-300">{result.analysis.resistanceLevels.join(', ')}</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Visible Indicators Disclosed (Anti-Hallucination) */}
+            {result.chart?.visibleIndicators && result.chart.visibleIndicators.length > 0 && (
+              <div className="text-xs">
+                <span className="text-[#8390a6] text-[11px] block mb-1">Visible Indicators Detected:</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {result.chart.visibleIndicators.map((ind, idx) => (
+                    <span key={idx} className="px-2 py-0.5 rounded-md bg-white/5 border border-white/10 text-[11px] text-[#c9d2e2]">
+                      {ind}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Risk Disclaimer */}
+            {result.riskManagement && (
+              <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs space-y-1">
+                <div className="flex items-center gap-1.5 text-amber-300 font-semibold">
+                  <Shield size={14} />
+                  <span>Risk Management Notice ({result.riskManagement.riskLevel} Risk)</span>
+                </div>
+                <p className="text-[#d8b4bc] text-[11px] leading-relaxed">
+                  {result.riskManagement.keyWarning}
+                </p>
+              </div>
+            )}
+            
+            {/* Copy Button */}
+            <div className="pt-2">
               <button 
                 onClick={handleCopyReport}
-                className="w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all cursor-pointer bg-white/10 text-white hover:bg-white/15 border border-white/10"
+                className="w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all cursor-pointer bg-white/10 text-white hover:bg-white/15 border border-white/10 text-xs"
               >
                 {copied ? (
-                  <><Check size={18} className="text-[#19d58b]" /> <span className="text-[#19d58b]">Report Copied to Clipboard</span></>
+                  <><Check size={16} className="text-[#19d58b]" /> <span className="text-[#19d58b]">Report Copied to Clipboard</span></>
                 ) : (
-                  <><Copy size={18} /> Copy Signal Report (INR)</>
+                  <><Copy size={16} /> Copy Verification Report</>
                 )}
               </button>
             </div>
-          </div>
+          </motion.div>
         )}
       </div>
     </motion.div>
   );
+}
+
+function SignalStatusBadge({ status }: { status: ChartSignalStatus | string }) {
+  if (status === 'STRONG_POSSIBLE_BULLISH_SETUP') {
+    return <span className="text-[#19d58b]">Strong Bullish Setup</span>;
+  }
+  if (status === 'POSSIBLE_BULLISH_SETUP') {
+    return <span className="text-[#19d58b]">Possible Bullish Setup</span>;
+  }
+  if (status === 'STRONG_POSSIBLE_BEARISH_SETUP') {
+    return <span className="text-[#ff4e72]">Strong Bearish Setup</span>;
+  }
+  if (status === 'POSSIBLE_BEARISH_SETUP') {
+    return <span className="text-[#ff4e72]">Possible Bearish Setup</span>;
+  }
+  if (status === 'NEUTRAL_WAIT') {
+    return <span className="text-amber-400">Neutral / Consolidation (Wait)</span>;
+  }
+  if (status === 'INVALID_CHART') {
+    return <span className="text-red-400">Invalid Chart</span>;
+  }
+  return <span className="text-[#8390a6]">No Signal (Insufficient Evidence)</span>;
 }
 
 function SignalRow({ label, value, type }: { label: string, value: string, type: 'success' | 'danger' | 'neutral' }) {
@@ -491,16 +972,17 @@ function SignalRow({ label, value, type }: { label: string, value: string, type:
   };
   
   return (
-    <div className="flex justify-between items-center p-4 bg-white/5 rounded-xl border border-white/5">
-      <span className="text-[#8390a6] text-sm font-medium">{label}</span>
-      <span className={`font-mono font-bold px-3 py-1 rounded border ${colors[type]}`}>{value}</span>
+    <div className="flex justify-between items-center p-3 bg-white/5 rounded-xl border border-white/5 text-xs">
+      <span className="text-[#8390a6] font-medium">{label}</span>
+      <span className={`font-mono font-bold px-2.5 py-1 rounded border ${colors[type]}`}>{value}</span>
     </div>
   );
 }
 
+
 // --- TAB 2: TOP MOVERS COMBINING INDIAN EQUITIES & FOREX --- //
 
-function TopMoversTab() {
+function TopMoversTab({ onSelectStock }: { onSelectStock?: (symbol: string) => void }) {
   const [movers, setMovers] = useState<TopMoverItem[]>([]);
   const [searchMetadata, setSearchMetadata] = useState<SearchMetadata | undefined>(undefined);
   const [loading, setLoading] = useState(false);
@@ -512,8 +994,7 @@ function TopMoversTab() {
     if (isManual) setLoading(true);
     setError('');
     try {
-      const response = await fetch(`/api/top-movers?category=${category}`);
-      const data: TopMoversResponse = await response.json();
+      const data: TopMoversResponse = await fetchTopMoversApi(category);
       
       if (data && Array.isArray(data.movers)) {
         setMovers(data.movers);
@@ -555,7 +1036,7 @@ function TopMoversTab() {
               Priced in ₹ (INR)
             </span>
             <span className="px-2.5 py-0.5 text-[11px] font-bold bg-[#53dcff]/15 text-[#53dcff] border border-[#53dcff]/30 rounded-full flex items-center gap-1">
-              <Sparkles size={11} /> Google Grounded
+              <Sparkles size={11} /> Real Verified Feeds
             </span>
           </div>
           <p className="text-[#8390a6] text-sm">Combined live radar of highest percentage gainers in Indian Equities (NSE/BSE) and Forex currency pairs.</p>
@@ -637,9 +1118,12 @@ function TopMoversTab() {
                   <div className="flex justify-between items-start mb-1">
                     <div>
                       <div className="flex items-center gap-2">
-                        <h3 className="text-2xl font-black tracking-tight text-white">
+                        <button
+                          onClick={() => onSelectStock?.(mover.symbol)}
+                          className="text-2xl font-black tracking-tight text-white hover:text-[#19d58b] transition-colors cursor-pointer text-left"
+                        >
                           {mover.symbol}
-                        </h3>
+                        </button>
                         {mover.exchange && (
                           <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-white/10 text-[#8390a6] font-mono">
                             {mover.exchange}
@@ -681,34 +1165,73 @@ function TopMoversTab() {
                   <div className="text-sm text-[#c9d2e2] leading-relaxed border-t border-white/5 pt-3 mb-3">
                     {mover.reason}
                   </div>
+
+                  {/* Section 11: Real Verified News Attachment */}
+                  <div className="p-3 rounded-2xl bg-white/[0.02] border border-white/5 mb-3 text-xs">
+                    <div className="flex items-center justify-between gap-1 mb-1">
+                      <span className="text-[10px] uppercase font-bold text-[#8390a6] flex items-center gap-1">
+                        <Newspaper size={11} className="text-[#53dcff]" /> Company News Context
+                      </span>
+                      {mover.hasVerifiedNews && mover.newsSentiment && (
+                        <span className={`text-[9px] font-extrabold px-1.5 py-0.2 rounded ${
+                          mover.newsSentiment === 'POSITIVE' ? 'bg-[#19d58b]/20 text-[#19d58b]' :
+                          mover.newsSentiment === 'NEGATIVE' ? 'bg-[#ff4e72]/20 text-[#ff4e72]' : 'bg-white/10 text-white'
+                        }`}>
+                          {mover.newsSentiment}
+                        </span>
+                      )}
+                    </div>
+                    
+                    {mover.hasVerifiedNews ? (
+                      <div>
+                        <p className="font-semibold text-white leading-snug line-clamp-2 mb-1">
+                          {mover.newsHeadline}
+                        </p>
+                        <div className="flex items-center justify-between text-[10px] text-[#8390a6]">
+                          <span>{mover.newsSource}</span>
+                          {mover.newsPublishedAt && <span>{mover.newsPublishedAt}</span>}
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-[#8390a6] text-[11px] italic">
+                        No verified recent company-specific news found.
+                      </p>
+                    )}
+                  </div>
                 </div>
 
                 <div className="pt-3 border-t border-white/5 flex items-center justify-between">
-                  <div className="flex items-center gap-1.5 text-[11px] text-[#53dcff] font-medium truncate">
-                    <Globe size={13} className="shrink-0" />
-                    <span className="truncate">{mover.sourceTitle || 'Live Market Quote'}</span>
+                  <button
+                    onClick={() => onSelectStock?.(mover.symbol)}
+                    className="px-3 py-1 bg-white/5 hover:bg-[#19d58b]/20 hover:text-[#19d58b] border border-white/10 rounded-xl text-xs font-bold text-white transition-all cursor-pointer flex items-center gap-1"
+                  >
+                    <span>Analyze</span>
+                    <ArrowUpRight size={12} />
+                  </button>
+
+                  <div className="flex items-center gap-2">
+                    {mover.sourceUrl ? (
+                      <a 
+                        href={mover.sourceUrl} 
+                        target="_blank" 
+                        rel="noreferrer"
+                        className="text-[11px] text-[#8390a6] hover:text-[#19d58b] flex items-center gap-1 font-semibold transition-colors"
+                      >
+                        <span>Quote</span>
+                        <ExternalLink size={12} />
+                      </a>
+                    ) : (
+                      <a
+                        href={`https://www.google.com/finance/quote/${mover.symbol}:NSE`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-[11px] text-[#8390a6] hover:text-[#19d58b] flex items-center gap-1 font-semibold transition-colors"
+                      >
+                        <span>NSE Quote</span>
+                        <ExternalLink size={12} />
+                      </a>
+                    )}
                   </div>
-                  {mover.sourceUrl ? (
-                    <a 
-                      href={mover.sourceUrl} 
-                      target="_blank" 
-                      rel="noreferrer"
-                      className="text-[11px] text-[#8390a6] hover:text-[#19d58b] flex items-center gap-1 font-semibold transition-colors shrink-0 ml-2"
-                    >
-                      <span>Quote</span>
-                      <ExternalLink size={12} />
-                    </a>
-                  ) : (
-                    <a
-                      href={`https://www.google.com/finance/quote/${mover.symbol}:NSE`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-[11px] text-[#8390a6] hover:text-[#19d58b] flex items-center gap-1 font-semibold transition-colors shrink-0 ml-2"
-                    >
-                      <span>NSE Quote</span>
-                      <ExternalLink size={12} />
-                    </a>
-                  )}
                 </div>
               </div>
             ))}
@@ -717,7 +1240,7 @@ function TopMoversTab() {
           {/* Google Search Grounding Details Module */}
           <GoogleSearchGroundingPanel 
             metadata={searchMetadata} 
-            title="Google Search Grounding Details for Indian & Forex Movers" 
+            title="Verified Feed Sources for Indian & Forex Movers" 
           />
         </>
       )}
@@ -727,18 +1250,21 @@ function TopMoversTab() {
 
 // --- TAB 3: CUSTOM INDIAN STOCKS & FOREX SEARCH WITH INR (₹) PRICING --- //
 
-function CustomStocksTab() {
-  const [queryInput, setQueryInput] = useState('RELIANCE');
+function CustomStocksTab({ initialQuery }: { initialQuery?: string }) {
+  const [queryInput, setQueryInput] = useState(initialQuery || 'RELIANCE');
   const [result, setResult] = useState<StockAnalysisResponse | null>(null);
   const [livePriceData, setLivePriceData] = useState<LiveQuote | null>(null);
+  const [verifiedStockNews, setVerifiedStockNews] = useState<NewsArticle[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [history, setHistory] = useState<any[]>([]);
 
   useEffect(() => {
     fetchHistory();
-    handleAnalyze('RELIANCE');
-  }, []);
+    const q = initialQuery || 'RELIANCE';
+    setQueryInput(q);
+    handleAnalyze(q);
+  }, [initialQuery]);
 
   // Poll live price for the actively selected stock every 3 seconds to keep price live
   useEffect(() => {
@@ -747,10 +1273,9 @@ function CustomStocksTab() {
     const pollActiveLivePrice = async () => {
       try {
         const sym = result.symbol.replace('/INR', '');
-        const res = await fetch(`/api/live-quotes?symbols=${sym}`);
-        const data = await res.json();
-        if (data && data.quotes && (data.quotes[sym] || data.quotes[result.symbol])) {
-          const latestQuote = data.quotes[sym] || data.quotes[result.symbol];
+        const quotes = await fetchLiveQuotesApi(sym);
+        if (quotes && (quotes[sym] || quotes[result.symbol])) {
+          const latestQuote = quotes[sym] || quotes[result.symbol];
           setLivePriceData(latestQuote);
         }
       } catch {
@@ -804,19 +1329,21 @@ function CustomStocksTab() {
     setError('');
     
     try {
-      const response = await fetch('/api/analyze-stocks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: searchQuery.trim() })
-      });
-      
-      const data: StockAnalysisResponse = await response.json();
-      if (data && !('error' in data)) {
+      const cleanQ = searchQuery.trim();
+      const sym = cleanQ.toUpperCase().replace('.NS', '').replace('.BO', '');
+
+      const [data, newsArticles] = await Promise.all([
+        analyzeStocksApi(cleanQ),
+        fetchStockNewsApi(sym).catch(() => [])
+      ]);
+
+      if (data && !('error' in (data as any))) {
         setResult(data);
+        setVerifiedStockNews(newsArticles || []);
         if (data.liveQuote) {
           setLivePriceData(data.liveQuote);
         }
-        saveToHistory(data, searchQuery.trim());
+        saveToHistory(data, cleanQ);
       } else {
         setError((data as any)?.error || 'Failed to analyze asset');
       }
@@ -1050,6 +1577,77 @@ function CustomStocksTab() {
             </div>
           </div>
 
+          {/* Section 11: Verified Real-Time Company News Intelligence Layer */}
+          <div className="bg-white/[0.03] p-6 rounded-2xl border border-white/10 space-y-4">
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                <Newspaper size={16} className="text-[#19d58b]" />
+                Fundamental & Event News Context ({result.symbol})
+              </h4>
+              <span className="text-xs text-[#8390a6] font-mono">
+                {verifiedStockNews.length > 0 ? `${verifiedStockNews.length} Verified Stories` : 'Verified Multi-Source Stream'}
+              </span>
+            </div>
+
+            {verifiedStockNews.length > 0 ? (
+              <div className="space-y-3">
+                {verifiedStockNews.map((art) => (
+                  <div 
+                    key={art.id} 
+                    className="p-4 rounded-xl bg-black/30 border border-white/5 hover:border-white/15 transition-all space-y-2"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="text-[#53dcff] font-semibold">{art.sourceName}</span>
+                        <span className="text-[#8390a6] font-mono">{art.publishedTimeFormatted}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {art.potentialImpact && (
+                          <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-white/5 text-[#8390a6]">
+                            {art.potentialImpact} Impact
+                          </span>
+                        )}
+                        <span className={`text-[10px] uppercase font-extrabold px-2 py-0.5 rounded ${
+                          art.sentiment === 'POSITIVE' ? 'bg-[#19d58b]/20 text-[#19d58b]' :
+                          art.sentiment === 'NEGATIVE' ? 'bg-[#ff4e72]/20 text-[#ff4e72]' :
+                          'bg-white/10 text-white'
+                        }`}>
+                          {art.sentiment}
+                        </span>
+                      </div>
+                    </div>
+
+                    <h5 className="text-sm font-bold text-white">{art.headline}</h5>
+                    <p className="text-xs text-[#8390a6] leading-relaxed">{art.summary}</p>
+                    
+                    {art.whyItMatters && (
+                      <div className="text-[11px] text-[#c9d2e2] bg-white/[0.02] p-2 rounded-lg border border-white/5">
+                        <strong className="text-[#53dcff]">Why It Matters:</strong> {art.whyItMatters}
+                      </div>
+                    )}
+
+                    <div className="flex justify-end pt-1">
+                      <a 
+                        href={art.sourceUrl} 
+                        target="_blank" 
+                        rel="noreferrer"
+                        className="text-xs text-[#19d58b] hover:underline flex items-center gap-1 font-medium"
+                      >
+                        <span>Original Article</span>
+                        <ExternalLink size={11} />
+                      </a>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="p-4 rounded-xl bg-white/[0.02] border border-white/5 text-center text-xs text-[#8390a6]">
+                <Info size={16} className="inline mr-1.5 text-[#53dcff]" />
+                No verified breaking company-specific news found in the last 24 hours. The signal is driven primarily by quantitative technicals and exchange price action.
+              </div>
+            )}
+          </div>
+
           {/* Company details & Direct Indian / Forex Sources */}
           <div className="bg-white/5 p-6 rounded-2xl border border-white/5">
             <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
@@ -1118,7 +1716,7 @@ function CustomStocksTab() {
           {/* Google Search Grounding Details & Sources */}
           <GoogleSearchGroundingPanel 
             metadata={result.searchMetadata} 
-            title={`Google Search Details & Sources for ${result.symbol} (INR ₹)`}
+            title={`Verified Feed Sources for ${result.symbol} (INR ₹)`}
           />
         </motion.div>
       )}
@@ -1126,183 +1724,8 @@ function CustomStocksTab() {
   );
 }
 
-// --- TAB 4: COMBINED MARKET NEWS (INDIAN STOCKS & FOREX) --- //
+// --- TAB 4: GLOBAL MARKET NEWS INTELLIGENCE --- //
 
-function NewsTab() {
-  const [news, setNews] = useState<MarketNewsItem[]>([]);
-  const [searchMetadata, setSearchMetadata] = useState<SearchMetadata | undefined>(undefined);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [newsCategory, setNewsCategory] = useState<'all' | 'indian' | 'forex'>('all');
-
-  const fetchNews = async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const res = await fetch('/api/market-news');
-      const data: MarketNewsResponse = await res.json();
-      
-      if (data && Array.isArray(data.news)) {
-        setNews(data.news);
-        setSearchMetadata(data.searchMetadata);
-      } else if (Array.isArray(data)) {
-        setNews(data);
-      } else {
-        setError('Failed to fetch news');
-      }
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchNews();
-  }, []);
-
-  const filteredNews = newsCategory === 'all'
-    ? news
-    : newsCategory === 'indian'
-    ? news.filter(n => n.marketCategory === 'INDIAN' || n.headline.includes('NIFTY') || n.headline.includes('SENSEX') || n.headline.includes('Tata') || n.headline.includes('India'))
-    : news.filter(n => n.marketCategory === 'FOREX' || n.headline.includes('Forex') || n.headline.includes('USD/INR') || n.headline.includes('Rupee') || n.headline.includes('Currency'));
-
-  return (
-    <motion.div 
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="space-y-6"
-    >
-      <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <h2 className="text-2xl font-bold">Indian & Forex Market News</h2>
-            <span className="px-2.5 py-0.5 text-[11px] font-bold bg-[#19d58b]/15 text-[#19d58b] border border-[#19d58b]/30 rounded-full flex items-center gap-1">
-              <Globe size={12} /> Google Search Grounded
-            </span>
-          </div>
-          <p className="text-[#8390a6]">Breaking Dalal Street headlines, RBI monetary policy developments, and global Forex currency market updates.</p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex p-1 bg-white/5 border border-white/10 rounded-xl">
-            <button
-              onClick={() => setNewsCategory('all')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                newsCategory === 'all' ? 'bg-[#19d58b] text-[#04100d]' : 'text-[#8390a6] hover:text-white'
-              }`}
-            >
-              ALL NEWS
-            </button>
-            <button
-              onClick={() => setNewsCategory('indian')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                newsCategory === 'indian' ? 'bg-[#19d58b] text-[#04100d]' : 'text-[#8390a6] hover:text-white'
-              }`}
-            >
-              DALAL STREET / NSE
-            </button>
-            <button
-              onClick={() => setNewsCategory('forex')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                newsCategory === 'forex' ? 'bg-[#19d58b] text-[#04100d]' : 'text-[#8390a6] hover:text-white'
-              }`}
-            >
-              FOREX / RUPEE
-            </button>
-          </div>
-
-          <button 
-            id="refresh-news-btn"
-            onClick={fetchNews}
-            disabled={loading}
-            className="px-5 py-2 bg-[#19d58b]/10 hover:bg-[#19d58b]/20 text-[#19d58b] border border-[#19d58b]/30 font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2 text-sm"
-          >
-            <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
-            <span>{loading ? 'Fetching...' : 'Refresh Feed'}</span>
-          </button>
-        </div>
-      </div>
-
-      {error && (
-        <div className="bg-red-500/10 border border-red-500/50 text-red-500 p-4 rounded-xl flex items-center gap-3">
-          <AlertTriangle size={20} />
-          {error}
-        </div>
-      )}
-
-      {loading && filteredNews.length === 0 ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {[1, 2, 3, 4, 5, 6].map(i => (
-            <div key={i} className="h-[220px] bg-[#0b1220]/80 rounded-3xl border border-white/5 animate-pulse p-6">
-              <div className="h-4 bg-white/10 rounded w-24 mb-4"></div>
-              <div className="h-6 bg-white/10 rounded w-full mb-3"></div>
-              <div className="h-12 bg-white/5 rounded w-full"></div>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <>
-          <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-            {filteredNews.map((item, idx) => (
-              <div 
-                key={idx} 
-                className="bg-[#0b1220]/80 border border-white/10 rounded-3xl p-6 hover:bg-[#0e172a] hover:border-[#53dcff]/40 transition-all relative overflow-hidden group flex flex-col justify-between h-full shadow-lg"
-              >
-                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-[#53dcff] to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                
-                <div>
-                  <div className="flex justify-between items-start mb-3 gap-4">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs uppercase tracking-wider text-[#53dcff] font-semibold flex items-center gap-1.5">
-                        <Globe size={13} /> {item.source}
-                      </span>
-                      {item.marketCategory && (
-                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-white/10 text-[#8390a6]">
-                          {item.marketCategory}
-                        </span>
-                      )}
-                    </div>
-                    <span className={`text-[10px] uppercase font-extrabold px-2.5 py-1 rounded-full border ${
-                      item.sentiment === 'Bullish' ? 'bg-[#19d58b]/15 text-[#19d58b] border-[#19d58b]/30' : 
-                      item.sentiment === 'Bearish' ? 'bg-[#ff4e72]/15 text-[#ff4e72] border-[#ff4e72]/30' : 
-                      'bg-white/10 text-white border-white/20'
-                    }`}>
-                      {item.sentiment}
-                    </span>
-                  </div>
-                  
-                  <h3 className="text-lg font-bold mb-3 leading-snug text-white group-hover:text-[#53dcff] transition-colors">{item.headline}</h3>
-                  <p className="text-[#8390a6] text-sm leading-relaxed mb-4">{item.summary}</p>
-                </div>
-
-                <div className="pt-3 border-t border-white/5 flex items-center justify-between text-xs">
-                  <span className="text-[#8390a6] flex items-center gap-1">
-                    <ShieldCheck size={13} className="text-[#19d58b]" /> Google Search Verified
-                  </span>
-                  {item.url && (
-                    <a 
-                      href={item.url} 
-                      target="_blank" 
-                      rel="noreferrer"
-                      className="text-[#19d58b] hover:text-[#35efaa] font-semibold flex items-center gap-1 transition-colors"
-                    >
-                      <span>Read Article</span>
-                      <ExternalLink size={12} />
-                    </a>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Google Search Grounding Details & Sources for News */}
-          <GoogleSearchGroundingPanel 
-            metadata={searchMetadata} 
-            title="Google Search Grounding Sources for Indian & Forex News"
-          />
-        </>
-      )}
-    </motion.div>
-  );
+function NewsTab({ onSelectStock }: { onSelectStock?: (symbol: string) => void }) {
+  return <NewsIntelligenceView onSelectStock={onSelectStock} />;
 }

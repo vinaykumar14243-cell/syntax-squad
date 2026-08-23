@@ -9,32 +9,42 @@ export default function ChartGraphic({ progress }: { progress?: MotionValue<numb
 
   useEffect(() => {
     // Fetch live BTCUSDT 1h klines from Binance and convert to INR (₹)
-    fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=50')
-      .then(res => res.json())
-      .then(data => {
-        const formatted = data.map((d: any) => [
-          parseFloat(d[1]) * USD_TO_INR_RATE, // open in INR
-          parseFloat(d[2]) * USD_TO_INR_RATE, // high in INR
-          parseFloat(d[3]) * USD_TO_INR_RATE, // low in INR
-          parseFloat(d[4]) * USD_TO_INR_RATE, // close in INR
-          parseFloat(d[5]) * USD_TO_INR_RATE, // volume in INR
-        ]);
-        setLiveData(formatted);
-      })
-      .catch(() => {
+    const loadKlines = async () => {
+      try {
+        const res = await fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=50');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const contentType = res.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) throw new Error('Not JSON');
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          const formatted = data.map((d: any) => [
+            parseFloat(d[1]) * USD_TO_INR_RATE, // open in INR
+            parseFloat(d[2]) * USD_TO_INR_RATE, // high in INR
+            parseFloat(d[3]) * USD_TO_INR_RATE, // low in INR
+            parseFloat(d[4]) * USD_TO_INR_RATE, // close in INR
+            parseFloat(d[5]) * USD_TO_INR_RATE, // volume in INR
+          ]);
+          setLiveData(formatted);
+          return;
+        }
+      } catch {
         // Synthesize Indian / Forex market candle series if network restricted
-        const base = 22850;
-        const fallbackCandles = Array.from({ length: 45 }, (_, idx) => {
-          const step = Math.sin(idx * 0.4) * 120 + idx * 8;
-          const open = base + step + (Math.random() * 40 - 20);
-          const close = open + (Math.random() * 60 - 25);
-          const high = Math.max(open, close) + Math.random() * 30;
-          const low = Math.min(open, close) - Math.random() * 30;
-          const volume = 500000 + Math.random() * 800000;
-          return [open, high, low, close, volume];
-        });
-        setLiveData(fallbackCandles);
+      }
+      
+      const base = 22850;
+      const fallbackCandles = Array.from({ length: 45 }, (_, idx) => {
+        const step = Math.sin(idx * 0.4) * 120 + idx * 8;
+        const open = base + step + (Math.random() * 40 - 20);
+        const close = open + (Math.random() * 60 - 25);
+        const high = Math.max(open, close) + Math.random() * 30;
+        const low = Math.min(open, close) - Math.random() * 30;
+        const volume = 500000 + Math.random() * 800000;
+        return [open, high, low, close, volume];
       });
+      setLiveData(fallbackCandles);
+    };
+
+    loadKlines();
   }, []);
 
   useEffect(() => {

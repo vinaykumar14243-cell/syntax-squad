@@ -1,6 +1,6 @@
 {
   "name": "Remix VantaTrade AI",
-  "description": "An AI-powered technical analysis and trading platform combining Indian Stock Markets (NSE/BSE) and Global Forex Markets with real-time Indian Rupee (INR ₹) pricing and Google Search Grounding.",
+  "description": "An AI-powered technical analysis and trading intelligence platform combining Indian Stock Markets (NSE/BSE) and Global Forex Markets with real-time Indian Rupee (INR ₹) pricing, strict visual chart verification, and Real-Time Global Market News Intelligence.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
